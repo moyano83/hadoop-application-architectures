@@ -183,10 +183,10 @@ There are a few strategies to best organize your data:
     organization. While bucketing and sorting do help there, another solution is to create data sets that are 
     prejoined (preaggregated)
     
-#### HBase Schema Design
+### HBase Schema Design
 HBase can be seeing as a huge hash table. Hash tables supports put, get, delete, iterations, value increment... 
 
-##### Row key
+#### Row key
 Considerations to correctly design a row key:
 
     * Record retrieval: HBase records can have an unlimited number of columns, but only a single row key. Keep in 
@@ -208,7 +208,7 @@ Considerations to correctly design a row key:
     * Readability: Start with something human-readable for your row keys, even more so if you are new to HBase
     * Uniqueness: A row key is equivalent to a key in our hash table analogy
     
-##### Timestamp
+#### Timestamp
 In HBase, timestamps serve a few important purposes:
   
     * Determines which records are newer in case of a put request to modify the record
@@ -217,11 +217,11 @@ In HBase, timestamps serve a few important purposes:
     time-to-live (TTL) when compared to the timestamp has elapsed. “Out-of-date” means that the record value has 
     either been overwritten by another put or deleted
 
-##### Hops
+#### Hops
 Hops are the number of synchronized get requests required to retrieve the requested information from HBase. In general, 
 although it’s possible to have multihop requests with HBase, it’s best to avoid them through better schema design.
 
-##### Tables and Regions
+#### Tables and Regions
 The number of tables and number of regions per table in HBase also impacts performance and distribution of data:
 
     * Put performance: All regions in a region server receiving put requests will have to share the region server’s 
@@ -235,22 +235,22 @@ The number of tables and number of regions per table in HBase also impacts perfo
     It is recommended to preselect the region count of the table to avoid random region splitting and suboptimal 
     region split ranges. 
 
-##### Using Columns
+#### Using Columns
 HBase stores data in a format called HFile. Each column value gets its own row in HFile, each column value gets its 
 own row in HFile. The amount of space consumed on disk plays a nontrivial role in your decision on how to structure 
 your HBase schema, in particular the number of columns. 
 
-##### Using Column Families
+#### Using Column Families
 A column family is a container for columns, each column family has its own set of HFiles and gets compacted 
 independently of other column families in the same table.  The main reason to use more than one column family is when 
 the operations being done and/or the rate of change on a subset of the columns of a table is significantly different
 from the other columns (optimizes compaction cost and block cache usage).
  
-##### Time-to-Live
+#### Time-to-Live
 Built-in feature of HBase that ages out data based on its timestamp, if on a major compaction the timestamp is older 
 than the specified TTL in the past, the record in question is removed.
 
-#### Managing Metadata
+### Managing Metadata
 Metadata, in general, refers to data about the data, it can refer to:
 
     * Logical data sets information, which is usually stored in a separate metadata repository
@@ -263,14 +263,14 @@ Metadata allows you to interact with your data through the higher-level logical 
 a mere collection of files on HDFS or a table in HBase. It also supplies information about your data and allows data 
 management tools to “hook” into this metadata for data discovery purposes as well as tracks lineage.
 
-##### Where to store Metadata?
+#### Where to store Metadata?
 Hive stores this metadata in a relational database called the Hive metastore. Hive also includes a service called the
  Hive metastore service that interfaces with the Hive metastore database. More projects wanted to use the same 
  metadata that was in the Hive metastore, like HCatalog, which allows other tools to integrate with the Hive 
  metastore. Hive metastore can be deployed in three modes: embedded metastore, local metastore, and remote 
  metastore (recommended).
  
-##### Other Ways of Storing Metadata
+#### Other Ways of Storing Metadata
 Other ways to store metadata are:
 
     * Embedding metadata in file paths and names: for example name of the data set, name of the partition column, 
@@ -279,3 +279,70 @@ Other ways to store metadata are:
     containing the data in HDFS (i.e. schema of the data in an Avro schema file)
     
 ## Chapter 2: Data Movement<a name="Chapter2"></a>
+Most applications implemented on Hadoop involve ingestion of disparate data types (relational databases and 
+mainframes, logs, machine-generated data, event data, files being imported from existing enterprise data storage 
+systems) from multiple sources and with differing requirements for frequency of ingestion.
+
+### Timeliness of Data Ingestion
+Timeliness of data ingestion is the time lag between the data is available for ingestion to when it’s accessible to 
+tools in the Hadoop ecosystem. It’s recommended to use one of the following classifications before designing the 
+ingestion architecture for an application:
+
+    * Macro batch: 15 minutes to hours, or even a daily job
+    * Microbatch: fired off every 2 minutes or so, but no more than 15 minutes in total.
+    * Near-Real-Time Decision Support: This is considered to be “immediately actionable” between 2 min and 2 sec
+    * Near-Real-Time Event Processing: Under 2 seconds, and can be as fast as a 100-millisecond range 
+    * Real Time: Anything under 100 milliseconds
+
+Use hadoop CLI tools or sqoop to ingest data with less strict timeliness requirements, and consider kafka or flume when 
+moving towards real time (we need to think about memory first and permanent storage second). Use tools like Storm or 
+Spark Streaming stream for processing.
+
+### Incremental Updates
+HDFS has high read and write rates because of its ability to parallelize I/O to multiple drives. The downside to HDFS
+is the inability to do appends or random writes to files after they’re created. Consider the following:
+ 
+    * Create periodic process to join multiple small files, using a long consecutive scan to read a single file is 
+    faster than performing many seeks to read the same information from multiple files
+    * To update files, try to write a “delta” file that includes the changes that need to be made to the 
+    existing file and create a compaction job to handle modifications, or consider HBase for this
+    
+In a compaction job, the data is sorted by a primary key. If the row is found twice, then the data from the newer 
+delta file is kept and the data from the older file is not. The results of the compaction process are written to 
+disk, and when the process is complete the resulting compaction data will replace the older, uncompacted data.
+
+### Access Patterns
+Recommendation for cases where simplicity, best compression, and highest scan rate are called for, HDFS is the 
+default selection. When random access is of primary importance, HBase should be the default, and for search 
+processing you should consider Solr.
+
+### Original Source System and Data Structure
+
+    * Read speed of the devices on source systems: To maximize read speeds, make sure to take advantage of as many 
+    disks as possible on the source system (Disk I/O is often a major bottleneck in any processing pipeline).
+    * Original file type: Consider Avro instead of CSV, find the most suitable format for the tool that will access 
+    that data
+    * Compression: Compression comes at the cost of more CPU usage, and possibly unability to split files. Use 
+    splittable container formats (copy the compressed file to Hadoop and convert the files in a post-processing step)
+    * Relational database management systems: Sqoop (batch tool) is the preferred tool of choice, if timeliness is a 
+    concern, consider flume of kafka. In sqoop, every data node connects to the RDBMS so if network is a bottlenech, 
+    consider to dump the data in an RDBMS file and ingest if from an edge node
+    * Streaming data: Flume or Kafka are highly recommended
+    * Logfiles: Ingest logfiles by streaming the logs directly to a tool like Flume or Kafka, instead of reading the 
+    logfiles from disk as they are written
+    
+### Transformations
+Transformation refers to making modifications on incoming data, distributing the data into partitions or buckets, or 
+sending the data to more than one store or location. The same advices holds here batch when the timeliness is not 
+that much of a concern and kafka, flume, spark for stream. Configure two output directories: one for records that 
+were processed successfully and one for failures. Flume has interceptors (Java class that allows for in-flight 
+enrichment of event data) and selectors (to send events to different endpoints) to deal with this problem.
+
+### Network Bottlenecks
+If the network is the bottle‐ neck, it will be important to either add more network bandwidth or compress the data 
+over the wire. 
+
+### Network Security
+Encrypt data on the wire if it needs to reach outside the company network boundaries (Flume provides native support).
+
+### Push or Pull
