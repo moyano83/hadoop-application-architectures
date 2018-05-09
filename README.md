@@ -283,7 +283,8 @@ Most applications implemented on Hadoop involve ingestion of disparate data type
 mainframes, logs, machine-generated data, event data, files being imported from existing enterprise data storage 
 systems) from multiple sources and with differing requirements for frequency of ingestion.
 
-### Timeliness of Data Ingestion
+### Data Ingestion Considerations
+#### Timeliness of Data Ingestion
 Timeliness of data ingestion is the time lag between the data is available for ingestion to when it’s accessible to 
 tools in the Hadoop ecosystem. It’s recommended to use one of the following classifications before designing the 
 ingestion architecture for an application:
@@ -298,7 +299,7 @@ Use hadoop CLI tools or sqoop to ingest data with less strict timeliness require
 moving towards real time (we need to think about memory first and permanent storage second). Use tools like Storm or 
 Spark Streaming stream for processing.
 
-### Incremental Updates
+#### Incremental Updates
 HDFS has high read and write rates because of its ability to parallelize I/O to multiple drives. The downside to HDFS
 is the inability to do appends or random writes to files after they’re created. Consider the following:
  
@@ -311,12 +312,12 @@ In a compaction job, the data is sorted by a primary key. If the row is found tw
 delta file is kept and the data from the older file is not. The results of the compaction process are written to 
 disk, and when the process is complete the resulting compaction data will replace the older, uncompacted data.
 
-### Access Patterns
+#### Access Patterns
 Recommendation for cases where simplicity, best compression, and highest scan rate are called for, HDFS is the 
 default selection. When random access is of primary importance, HBase should be the default, and for search 
 processing you should consider Solr.
 
-### Original Source System and Data Structure
+#### Original Source System and Data Structure
 
     * Read speed of the devices on source systems: To maximize read speeds, make sure to take advantage of as many 
     disks as possible on the source system (Disk I/O is often a major bottleneck in any processing pipeline).
@@ -331,18 +332,207 @@ processing you should consider Solr.
     * Logfiles: Ingest logfiles by streaming the logs directly to a tool like Flume or Kafka, instead of reading the 
     logfiles from disk as they are written
     
-### Transformations
+#### Transformations
 Transformation refers to making modifications on incoming data, distributing the data into partitions or buckets, or 
 sending the data to more than one store or location. The same advices holds here batch when the timeliness is not 
 that much of a concern and kafka, flume, spark for stream. Configure two output directories: one for records that 
 were processed successfully and one for failures. Flume has interceptors (Java class that allows for in-flight 
 enrichment of event data) and selectors (to send events to different endpoints) to deal with this problem.
 
-### Network Bottlenecks
+#### Network Bottlenecks
 If the network is the bottle‐ neck, it will be important to either add more network bandwidth or compress the data 
 over the wire. 
 
-### Network Security
+#### Network Security
 Encrypt data on the wire if it needs to reach outside the company network boundaries (Flume provides native support).
 
-### Push or Pull
+#### Push or Pull
+
+    * Sqoop: Pull solution to transfer data from RDBMS to Hadoop and viceversa
+    * Flume: Pushes events through a pipeline (composed of many different types)
+    
+#### Failure Handling
+In distributed computing, the failure scenario has to be consider. For example an `hdfs put ...` failure scenario can
+be handled by having multiple local filesystem directories that represent different bucketing in the life cycle of the
+file transfer process. Some systems like flume or kafka might produce duplicate records in case of failure so the 
+system has to account for this possibility.
+
+### Data Ingestion Options
+#### File Transfers
+The simplest and fastest way is using the cli tools, and should be considered as the first option when you are designing
+ a new data processing pipeline with Hadoop:
+
+    * It is an all or nothing batch processing approach
+    * By default single-threaded, not parallelizable
+    * From Filesystem to HDFS
+    * Applying transformations to data is not supported
+    * Byte-to-byte transfer type, any data format supported
+    
+##### HDFS client commands
+When you use the put command there are normally two approaches: the double-hop (copying the file to a hadoop edge 
+node filesystem and then to HDFS) and single-hop (which requires that the source device is mountable, for example a 
+NAS or SAN, and the put command can read directly from the device and write the file directly to HDFS).
+
+##### Mountable HDFS
+There are options to allow clients to interact with HDFS like if it was the normal filesystem, with POSIX support 
+although random writes not supported. Example of these options:
+
+    * Fuse-DFS: Involves a number of hops between client applications and HDFS, which can impact performance
+    * NFSv3: The design involves an NFS gateway server that streams files to HDFS using the DFSClient (preferred), 
+    not suitable for large data volume transfers
+    
+#### Considerations for File Transfers versus Other Ingest Methods
+Some considerations to take into account when you’re trying to determine whether a file transfer is acceptable, or 
+whether you should use a tool such as Flume: Do you need to ingest data into multiple locations? Is reliability 
+important? Is transformation of the data required before ingestion? If the answer to the questions is yes, Flume or 
+kafka are probably a better fit.
+
+#### Sqoop: Batch Transfer Between Hadoop and Relational Databases
+Sqoop generates map-only MapReduce jobs where each mapper connects to the database using a Java database connectivity
+ (JDBC) driver, selects a portion of the table to be imported, and writes the data to HDFS. 
+ 
+##### Choosing a split-by column
+By default, Sqoop will use four mappers and will split work between them by taking the minimum and maximum values of
+the primary key column and dividing the range equally among the mappers. The `split-by` parameter lets you specify 
+a different column for splitting the table between mappers, and num-mappers lets you control the number of mappers. 
+Use this option to avoid Data skew.
+
+##### Using database-specific connectors whenever available
+Different RDBMSs support different dialects of SQL language.
+
+##### Using the Goldilocks method of Sqoop performance tuning
+In most cases, Hadoop cluster capacity will vastly exceed that of the RDBMS. If Sqoop uses too many mappers, Hadoop 
+will effectively run a denial-of-service attack against your database. Start with a very low number of mappers and 
+gradually increase it.
+
+##### Loading many tables in parallel with fair scheduler throttling
+A common use case is to have to ingest many tables from the same RDBMS. There are two different approaches:
+
+    * Load the tables sequentially: Not optimal, mappers can stay iddle
+    * Load the tables in parallel: Uses resources more effectively, but adds complexity
+
+##### Diagnosing bottlenecks
+If adding more mappers has little impact on ingest rates, there is a bottleneck somewhere in the pipe, for example:
+
+    * Network bandwidth: If the network limit has been reached, adding more mappers will increase load on the database,
+    but will not improve ingest rates
+    * RDBMS: Check the query generated by the mappers. Sqoop in incremental mode uses indexes. When Sqoop is used to 
+    ingest an entire table, full table scans are typically preferred. If multiple mappers are competing for access to
+    the same data blocks, you will also see lower throughput
+    * Data skew: Sqoop will look for the highest and lowest values of the PK and divide the range equally between 
+    the mappers, use a different column if the data is skewed
+    * Connector: Not specific connectors works worst
+    * Hadoop: Verify that Sqoop’s mappers are not waiting for task slots, check disk I/O and CPU utilization
+    * Inefficient access path: If you specify the split column, it is important that this column is either the 
+    partition key or has an index
+    
+##### Keeping Hadoop updated
+If we wish to update data, we need to either replace the data set, add par‐ titions, or create a new data set by 
+merging changes. When the table is big and takes a long time to ingest, we prefer to ingest only the modifications 
+which requires the ability to identify such modifications. Sqoop supports two methods for this:
+
+    * Sequence ID: Sqoop can track the last ID it wrote to HDFS, and ingest only the newer ones
+    * Timestamp: Sqoop can store the last timestamp it wrote to HDFS, and ingest rows with a newer one
+    
+When running Sqoop with the --incremental flag, you can reuse the same directory name, so the new data will be loaded as
+additional files in the same directory although this is not recommended. When the incremental ingest contains updates to
+existing rows, we need to merge the new data set with the existing one with the command sqoop-merge.
+
+#### Flume: Event-Based Data Collection and Processing
+Flume is a distributed, reliable, and available system for the efficient collection, aggregation, and movement of
+streaming data. Main components:
+
+    * Sources: Consume events from external sources and forward to channels
+    * Interceptors: Allow events to be intercepted and modified in flight
+    * Selectors: Provide routing for events
+    * Channels: Store events until they’re consumed by a sink
+    * Sink: Remove events from a channel and deliver to a destination
+    * Flume agent: JVM process hosting a set of Flume sources, sinks, channels... Container for components
+    
+Flume is reliable, recoverable (events are persisted), declarative (no code required) and highly customizable.
+
+##### Flume patterns
+
+    * Fan-in: Several flume agents (web servers or other), which send events to several but fewer agents on Hadoop edge 
+    nodes on the same network than the hadoop cluster, which puts the data in HDFS
+    * Splitting data on ingest: split events for ingestion into multiple targets, intended for disaster recovery (DR)
+    * Partitioning data on ingest: For example, the HDFS sink can partition events by timestamp
+    * Splitting events for streaming analytics: sending to a streaming analytics engine such as Storm or Spark Streaming where real-time counts, windowing, and summaries can be made
+    
+##### File formats:
+
+    * Text files: Not optimal, in general, when you’re ingesting data through Flume it’s recommended to either save 
+    to SequenceFiles, which is the default for the HDFS sink, or save as Avro
+    * Columnar formats: Columnar file formats such as RCFile, ORC, or Parquet are also not well suited for Flume as 
+    they require batching events, which means you can lose more data if there’s a problem
+    
+Writing to these different formats is done through Flume event serializers, creating custom event serializers is a 
+com‐ mon task, since it’s often required to make the format of the persisted data look different from the Flume event
+ that was sent over the wire.
+ 
+##### Recommendations
+For flume sources:
+
+    * Batch size: Start with 1,000 events in a batch and adjust up or down from there based on performance
+    * Threads: In general, more threads are good up to the point at which your network or CPUs are maxed out, but it 
+    also depends on the type of source (RDBMS, Avro...)
+    
+For flume sinks:
+
+    * Number of sinks: A sink can only fetch data from a single channel, but a channel supports multiple sinks
+    * Batch Sizes: buffering adds significant benefits in terms of throughput
+    
+For channels:
+
+    * Memory channels: Use it when performance is your primary consideration, and data loss is not an issue
+    * File channels: File channel persists events to disk, configuring a file channel to use multiple disks will help
+     to improve performance, using an enterprise storage system such as NAS can provide guarantees against data loss 
+     and use dual checkpoint directories
+     
+To size the channels consider:
+
+    * Memory channels: Consider limiting the number of memory channels on a single node
+    * File channels: When the file channel only supported writing to one drive, it made sense to configure multiple 
+    file channels to take advantage of more disks
+    
+##### Finding Flume bottlenecks
+
+    * Latency between nodes: Every client-to-source batch commit requires a full round-trip over the network. Look at
+     batch sizes
+    * Throughput between nodes: Consider using compression with Flume to increase throughput
+    * Number of threads: Adding threads might lead to an improvement
+    * Number of sinks: Consider writing with more than one sink to increase performance
+    * Channel: Consider channel specific drawbacks
+    * Garbage collection issues: Can happen when event objects are stored in the channel for too long
+    
+### Kafka
+Apache Kafka is a distributed publish-subscribe messaging system. 
+
+    * Kafka can be used in place of a traditional message broker or message queue in an application architecture in 
+    order to decouple services
+    * Kafka’s most common use case is high rate activity streams, such as website clickstream, metrics, and logging
+    * Another common use case is stream data processing, where Kafka can be used as both the source of the information 
+    stream and the target where a streaming job records its results for consumption by other systems
+    
+#### Kafka and Hadoop
+A common question is whether to use Kafka or Flume for ingest of log data or other streaming data sources into Hadoop:
+
+    * Flume is a more complete Hadoop ingest solution, support for writing data to Hadoop, solves many common issues in 
+    writing data to HDFS, such as reliability, optimal file sizes, file formats, updating metadata, and partitioning
+    * Kafka is a good fit as a reliable, highly available, high performance data source
+    
+Flume and kafka are complementary, and there is a flume kafka sink, channel and source.
+
+### Data Extraction
+The following are some common scenarios and considerations for extracting data from Hadoop:
+
+    * Moving data from Hadoop to an RDBMS or data warehouse: Sqoop will be the appropriate choice for ingesting the 
+    transformed data into the target database. However, if Sqoop is not an option, using a simple file extract from 
+    Hadoop and then using a vendor-specific ingest tool is an alternative
+    * Exporting for analysis by external applications: A simple file transfer is probably suitable—for example, 
+    using the Hadoop fs -get command or one of the mountable HDFS options
+    * Moving data between Hadoop clusters: Common in dissaster recovery (DR). DistCp is the solution, which uses 
+    MapReduce to perform parallel transfers of large volumes of data. Suitable also when the source or target is a 
+    non-HDFS filesystem
+    
+## Chapter 3: Processing Data in Hadoop<a name="Chapter3"></a>
