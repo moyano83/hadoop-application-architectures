@@ -536,3 +536,7 @@ The following are some common scenarios and considerations for extracting data f
     non-HDFS filesystem
     
 ## Chapter 3: Processing Data in Hadoop<a name="Chapter3"></a>
+### MapReduce
+#### MapReduce Overview
+The MapReduce programming paradigm breaks processing into two basic phases: a map phase and a reduce phase. The 
+input and output of each phase are key-value pairs. 
