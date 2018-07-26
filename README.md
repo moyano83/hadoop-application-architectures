@@ -539,4 +539,163 @@ The following are some common scenarios and considerations for extracting data f
 ### MapReduce
 #### MapReduce Overview
 The MapReduce programming paradigm breaks processing into two basic phases: a map phase and a reduce phase. The 
-input and output of each phase are key-value pairs. 
+input and output of each phase are key-value pairs. Data locality is an important principle of MapReduce, when the 
+mapper has processed the input data it will output a key-value pair to the next phase, the sort and shuffle (sort and
+ partitioning). The reducer will write out some amount of the data or aggregate to a store.
+The output of the mapper and the reducer is written to disk. If the output of the reducer requires additional processing
+ then the entire data set will be written to disk and then read again. This pattern is called _synchronization barrier_. 
+Components involved in the map phase of a MapReduce job:
+
+    * InputFormat: Class used to access the data in the mappers. Implements a method getSplits() which implements 
+    the logic of how input will be distributed between the map processes and the getReader() which allows the mapper to 
+    access the data it will process
+    * RecordReader: Class that reads the data blocks and returns key-value records to the map task
+    * Mapper.setup(): Method used to initialize variables and file handles that will later get used in the map process
+    * Mapper.map(): This method has three inputs: key, value, and a context. The key and value are provided by the 
+    RecordReader and contain the data that the map() method should process
+    * Partitioner: Implements the logic of how data is partitioned between the reducers
+    * Mapper.cleanup(): Called after the map() method has executed for all records
+    * Combiner: Provides an easy method to reduce the amount of network traffic between the mappers and reducers, it
+     executes locally on the same node where the mapper executes
+
+There are a few components of which you should be aware on the reduce phase:
+    
+    * Reducer.setup(): Executes before the reducer starts and is typically used to initialize variables and file handles
+    * Reducer.reduce(): Method where the reducer does most of the data processing. The keys are sorted, the value 
+    parameter has changed to values
+    * Reducer.cleanup(): Called after all the records are processed
+    * OutputFormat: When the reducer calls context.write(Km,V), it sends the output to the outputFileFormat, which 
+    is responsible for formatting and writing the output data. A single reducer will always write a single file, so 
+    on HDFS you will get one file per reducer
+    
+#### When to Use MapReduce
+There is a subset of problems, such as file compaction, distributed file-copy, or row-level data validation, which 
+translates to MapReduce quite naturally.
+
+### Spark
+The MapReduce model is useful for large-scale data  processing, but it is limited to a very rigid data flow model 
+that is unsuitable for many applications. Spark addresses many of the shortcomings in the MapReduce model.
+
+#### Spark Overview
+##### DAG Model
+Spark allows you to string together sets of map and reduce tasks (these chains are known as directed acyclic graphs).
+The spark's engine creates those complex chains of steps from the application’s logic, rather than the DAG being 
+ an abstraction added externally to the model.
+ 
+#### Overview of Spark Components
+Spark Components:
+    
+    * Driver: program that defines the logic and the resilient distributed datasets (RDDs) and their transformations
+    * DAG scheduler: Queue planner that receives the parallel operations and plans accordingly
+    * Cluster manager: has information about the workers, assigned threads, and location of data blocks. Assigns 
+    specific processing tasks to workers 
+    * Worker: receives units of work and data to manage and send the results back to the driver
+    
+#### Basic Spark Concepts
+##### Resilient Distributed Datasets
+RDDs are collections of serializable elements, and such a collection may be parti‐ tioned, in which case it is stored
+ on multiple nodes. RDDs store their lineage, so if the data is lost, Spark will replay the lineage to rebuild the lost 
+ RDDs so the job can continue.
+ 
+##### Shared variables
+Broadcast variables are sent to all the remote execution nodes, accumulators are also sent to the remote execution 
+nodes, but they can be modified by the executors.
+
+##### SparkContext
+Object that represents the connection to a Spark cluster
+
+##### Transformations
+Lazy functions that takes an RDD and returns another. Examples are _map_, _filter_, _keyBy_ (takes an RDD and 
+returns a key-value pair RDD), _join_, _groupByKey_ or _sort_.
+
+##### Action
+Actions are methods that take an RDD, perform a computation, and return the result to the driver application.
+
+#### Benefits of Using Spark
+Benefits or using spark includes:
+
+     * Simplicity: Cleaner API than MapReduce
+     * Versatility: Spark was designed and built to be an extensible, general-purpose parallel processing framework
+     * Reduced disk I/O: RDDs can be stored in memory and processed in multiple steps or iterations without adding I/O
+     * Storage: Options include in memory on a single node, in memory replicated to multiple nodes, or persisted to disk
+     * Multilanguage:  Spark APIs are implemented for Java, Scala, and Python
+     * Resource manager independence: supports both YARN and Mesos as resource managers, and standalone mode
+     * Interactive shell (REPL): Spark includes a shell (REPL for read-eval-print-loop) for interactive experimentation
+     
+#### When to Use Spark
+Spark is the best choice for machine-learning applications due to its ability to perform iterative operations on data 
+cached in memory. It also offers SQL, graph processing, and streaming frameworks.
+
+### Abstractions
+A number of projects have been developed with the goal of making MapReduce easier to use by providing an abstraction 
+that hides much of its complexity. These abstractions can be divided in two different programming models: ETL and query.
+
+### Pig
+Pig interprets queries written in a Pig-specific workflow language called Pig Latin, which gets compiled for 
+execution by an underlying execution engine such as MapReduce. The scripts are first compiled into a logical plan 
+and then into a physical plan, which is what gets executed by the underlying engine (only the physical plan changes 
+when you use a different execution engine).
+
+#### When to use Pig
+Pig is easy to read and understand, a lot of the complexity of MapReduce is removed, scripts are small and requires 
+no compilation (can be run in the console). It also provides explanations of the inner execution of pig.
+
+### Crunch
+Similar to Pig, Crunch centers on the Pipeline object (_MRPipeline_ or _SparkPipeline_ which allows you to create your 
+first _PCollections_. PCollections and PTables in Crunch play a very similar role to RDDs in Spark and relations in 
+Pig. The execution of a Crunch pipeline occurs with a call to the done() method (nothing happens until this method is
+ called).
+ 
+#### When to Use Crunch
+Similar to Spark, so use Spark instead.
+
+### Cascading
+Somewhat of a middle ground between Crunch and Pig
+
+#### When to Use Cascading
+Similar to Spark, so use Spark instead.
+
+### Hive
+Enables data analysts to analyze data in Hadoop by using SQL syntax without having to learn how to write MapReduce.
+
+#### Hive Overview
+Hive is widely adopted, the biggest drawback is performance. To solve performance problems, there are some solutions:
+
+    * Hive-on-Tez: Tez is a more performant batch engine than MapReduce to be used as Hive’s underlying execution engine
+    * Hive-on-Spark: Project to allow Spark to be Hive’s underlying execution engine
+    * Vectorized query execution: Effort to reduce the CPU overhead required by Hive queries by processing 
+    a batch of rows at a time and reducing the number of conditional branches when processing these batches (you need
+     to store your data in particular formats like ORC and Parquet to take advantage of this support)
+     
+#### When to Use Hive
+The Hive meta‐store, has become the de facto standard for storing metadata in the Hadoop ecosystem. Hive is a good 
+choice for queries that can be expressed in SQL, particularly long-running queries where fault tolerance is desirable. 
+
+### Impala
+Impala is an open source, low-latency SQL engine on Hadoop inspired by Google’s Dremel paper. Designed to optimize 
+latency, its architecture is similar to that of traditional massively parallel processing (MPP) data warehouses and 
+does not use map reduce but uses the Hive metastore.
+
+#### Impala Overview
+Impala has a shared nothing architecture, which allows for system-level fault tolerance and huge scalability that 
+allows Impala to remain performant as the number of users and concurrent queries increases. Impala’s architecture 
+includes the Impala daemons (impalad), the catalog service, and the statestore. Impala daemons run on every node in 
+the cluster, and each daemon is capable of acting as the query planner, coordinator, and execution engine.
+
+#### Speed-Oriented Design
+Several design decisions to reduce Impala’s query latency compared to other SQL-in-Hadoop solutions were taken:
+
+    * Efficient use of memory: Data is read, and remains in memory as it goes through multiple phases of processing. 
+    If you lose a node while a query is running, your query will fail. Therefore, Impala is recommended for queries 
+    that run quickly enough that restarting the entire query in case of a failure is not a major event
+    * Long running daemons: Impala daemons are long-running processes. There is no startup cost incurred and no 
+    moving of JARs over the network or loading class files when a query is executed, because Impala is always running
+    * Efficient execution engine: Implemented in C++, highly efficient code, no Java’s garbage collection impact
+    * Use of LLVM: Use of Low Level Virtual Machine (LLVM) to compile the query and functions in optimized machine code
+    
+#### When to Use Impala
+Use Impala instead of Hive where possible to make use of the higher speed (hundreds of users who will need to run SQL
+ queries concurrently). If the query takes long time to execute use Hive for the risk of node failures.
+ 
+ 
+## Chapter 4: Common Hadoop Processing Patterns <a name="Chapter4"></a> 
