@@ -13,6 +13,7 @@
 9. [Chapter 9: Fraud Detection](#Chapter9)
 10. [Chapter 10: Data Warehouse](#Chapter10)
 
+
 ## Chapter 1: Data Modeling in Hadoop<a name="Chapter1"></a>
 There are many factors that you should take into consideration before dumping your data into Hadoop:
 
@@ -277,7 +278,8 @@ Other ways to store metadata are:
     and the various values of the partitioning column. 
     * Storing the metadata in HDFS: One option to store metadata is to create a hidden directory, inside the directory 
     containing the data in HDFS (i.e. schema of the data in an Avro schema file)
-    
+
+
 ## Chapter 2: Data Movement<a name="Chapter2"></a>
 Most applications implemented on Hadoop involve ingestion of disparate data types (relational databases and 
 mainframes, logs, machine-generated data, event data, files being imported from existing enterprise data storage 
@@ -534,7 +536,8 @@ The following are some common scenarios and considerations for extracting data f
     * Moving data between Hadoop clusters: Common in dissaster recovery (DR). DistCp is the solution, which uses 
     MapReduce to perform parallel transfers of large volumes of data. Suitable also when the source or target is a 
     non-HDFS filesystem
-    
+
+
 ## Chapter 3: Processing Data in Hadoop<a name="Chapter3"></a>
 ### MapReduce
 #### MapReduce Overview
@@ -698,4 +701,129 @@ Use Impala instead of Hive where possible to make use of the higher speed (hundr
  queries concurrently). If the query takes long time to execute use Hive for the risk of node failures.
  
  
-## Chapter 4: Common Hadoop Processing Patterns <a name="Chapter4"></a> 
+## Chapter 4: Common Hadoop Processing Patterns<a name="Chapter4"></a> 
+### Pattern: Removing Duplicate Records by Primary Key
+Duplicate records in Hadoop are common due to resends (fully duplicated records) and delta processing (updated records).
+
+#### Deduplication Explanation
+In Spark, a simple reduce by key, making sure that we get the latest value for a given key suffices. With SQL, we can
+ do a join between the table to get the values (called A) and the same table (called B), but to make sure that we get
+  the latest value, table B should have a condition such as _MAX(timestamp)_ to get the latest row values.
+
+### Pattern: Windowing Analysis
+Windowing functions provide the ability to scan over an ordered sequence of events over some window.
+
+#### Windowing Analysis Explanation
+Imagine a stock market example to analyze the peaks an valleys of some tickers. The approach would be to partition 
+the records according to the ticker and sort according to the timestamp, and once everything is in the same place and 
+ordered we can carry on with the peak and valleys analysis. With SQL and following the same pattern than before, we 
+can create a subquery with all the elements grouped by ticker and in order with two columns added: the previous and 
+the following value to the current one. Then we can use a _CASE_ instruction to mark the peaks and valleys by 
+comparing the current value to the previous and following value.
+
+### Pattern: Time Series Modifications
+The last pattern is an update of records based on a primary key while also keeping all of the history. For example a 
+stock price which current value has an end date null or set for previous values. If a new value arrives, we need to 
+update the end date of the current to the start date of the received.
+
+#### Use HBase and Versioning
+HBase has a way to store every change you make to a record as versions. Versions are defined at a column level and 
+ordered by modification timestamp, so you can go to any point in time to see what the record looked like. This has a 
+performance impact with large scans as the historic of records grows, and block cache reads as HBase loads blocks of 
+64 Kb on read, potentially containing unwanting records.
+
+#### Use HBase with a RowKey of RecordKey and StartTime 
+Another option is to include a timestamp in the row key so we can just retrieve the last version of a record on 
+query, which is faster than the previous but still has problems with block cache reads.
+
+#### Use HDFS and Rewrite the Whole Table
+Another solution is to remove HBase and rewrite the entire table each time a new value is received, leveraging 
+partitions to spead up the process.
+
+#### Use Partitions on HDFS for Current and Historical Records
+It is also possible to put the most current records in one partition and the historic records in another partition
+
+#### Time Series Modifications Explanation
+As with the windowing example, we need to partition the records accordingly to distribute the rows we want to update 
+and store. With SQL, subqueries are required to partition and distribute the data accordingly.
+
+
+## Chapter 5: Graph Processing on Hadoop<a name="Chapter5"></a> 
+### What Is a Graph?
+A graph is composed by vertex and edges. An edge can have a description of the relationship that connects two vertex,
+ which represents entities.
+ 
+### What Is Graph Processing?
+Graph processing means processing at a global level that may touch every vertex in the graph.
+
+### How Do You Process a Graph in a Distributed System?
+MapReduce is not suitable for graph processing giving the type of the graph processing techniques and its iterative 
+nature. A way to solve this is to break the MapReduce rule that mappers are not allowed to talk to other mappers. This 
+shared nothing concept is very important to a distributed system like Hadoop that needs sync points and strategies 
+to recover from failure.
+
+#### The Bulk Synchronous Parallel Model
+Bulk Synchronous Parallel (BSP) uses the idea of distributed processes doing work within a superstep. These distributed 
+processes can send messages to each other, but they cannot act upon those messages until the next superstep, which will 
+act as the boundaries for our needed sync points. We can only reach the next superstep when all distributed 
+processes finish processing and sending message sending of the current superstep.
+
+### Giraph
+Giraph is an open source implementation of Google’s Pregel. In esence, giraph does the following:
+
+    1. Read and partition the data.
+    2. Batch-process the graph with BSP.
+    3. Write the graph back to disk.
+    
+#### Read and Partition the Data
+Giraph has its own input and output formats and record readers (VertexReader), which returns a vertex object. A 
+vertex object contains:
+
+    * Vertex ID: Identifier
+    * Vertex value: The entity value of the vertex
+    * Edge: Object made up of two parts: the vertex ID of the source vertex and an object that can represent 
+    information about where the edge is pointing and/or what type of edge it is
+    
+#### Batch Process the Graph with BSP
+The BSP execution pattern is composed of three computation stages: vertex, master, and worker. Each BSP pass starts 
+with a master computation stage. Then it follows with a worker computation stage on each distributed JVM, followed 
+by a vertex computation for every vertex in that JVM’s local memory or local disk. The vertex computations may 
+process messages that will be sent to the receiving vertex, but the receiving vertices will not get those messages 
+until the next BSP pass.
+
+#### Write the Graph Back to Disk
+A class VertexOutputFormat from which different specific classes extends is used to write vertex objects to disk.
+
+#### When Should You Use Giraph?
+Giraph is not supported by every vendor, if your use cases are graphing, you have hard SLAs and need a mature solution, 
+Giraph may be your tool.
+
+### GraphX 
+Spark's GraphX uses another type of RDD, which are EdgeRDD and VertexRDD. We can get from any RDD to an EdgeRDD or 
+VertexRDD with a simple map transformation function. The last step from normal Spark to GraphX is putting these two 
+new RDDs in a Graph object. The Graph object just contains a reference to these two RDDs and provides methods for 
+doing graph processing on them. In GraphX there is an option for a catch-all vertex called default. So, if a message 
+were sent to a nonexisting vertex, it would go to the default.
+
+#### GraphX Pregel Interface
+graph.pregel() has two sets of parameters: the first set is values, and the second set is functions that will be 
+executed in parallel.
+The parameter definitions are:
+
+    * First message
+    * Max iterations (we used the default value and didn’t use this parameter)
+    * Edge direction (we used the default value and didn’t use this parameter)
+
+The second set of parameters is a set of methods for processing:
+
+    * vprog(): User-defined vertex program. In other words, it specifies what to do when a message reaches a vertex
+    * sendMessage(): Logic for a vertex that may or may not want to send a message (dictates when to send messages)
+    * mergeMessage(): Function that determines how messages going to the same vertex will be merged
+    
+#### Which Tool to Use?
+If your use cases are 100% graph and you need the most robust and scalable solu‐ tion, Giraph is your best option. 
+If graph processing is just a part of your solution and integration and overall code flexibility is important, 
+GraphX is likely a good choice.
+
+
+## Chapter 6: Orchestration<a name="Chapter6"></a> 
