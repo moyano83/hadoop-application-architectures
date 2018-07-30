@@ -827,3 +827,101 @@ GraphX is likely a good choice.
 
 
 ## Chapter 6: Orchestration<a name="Chapter6"></a> 
+### Why We Need Workflow Orchestration
+Developing end-to-end applications with Hadoop usually involves several steps to process the data. Each of these steps 
+can be referred to as an action, which have to be scheduled, coordinated, and managed.
+
+### The Limits of Scripting
+Attempting to maintain a home-grown automation script in the face of growing production requirements can be a 
+frustrating exercise of reinventing the wheel (handle errors, notify users and other monitoring systems of the 
+workflow status, track the execution time...).
+
+### The Enterprise Job Scheduler and Hadoop
+In general, the scheduling systems work by installing an agent on each server where actions can be executed. In Hadoop 
+clusters, this is usually the edge node (also called gateway nodes) where the client utilities and application JARs 
+are deployed.
+
+### Orchestration Frameworks in the Hadoop Ecosystem
+When choosing a workflow engine, consider the following: ease of installation, community involvement and uptake, user
+ interface support, testing (how do you test your workflows after you have written them?), logs, workflow management, 
+ error handling.
+ 
+#### Oozie Terminology
+
+    * Workflow action: A single unit of work that can be done by the orchestration engine (e.g. a Hive query)
+    * Workflow: A control-dependency DAG of actions (or jobs)
+    * Coordinator: Definition of data sets and schedules that trigger workflows
+    * Bundle: Collection of coordinators
+
+#### Oozie Overview
+The main logical components of Oozie are:
+
+    * A workflow engine: Executes a workflow. A workflow includes actions such as Sqoop, Hive, Pig, and Java
+    * A scheduler (coordinator): Schedules workflows based on frequency or on existence of data sets in preset locations
+    * REST API: Includes APIs to execute, schedule, and monitor workflows
+    * Command-line client: Makes REST API calls and allows users to execute, schedule, and monitor jobs
+    * Bundles: Represent a collection of coordinator applications that can be controlled together
+    * Notifications: Sends events to an external JMS queue when the job status changes for simple integration
+    * SLA monitoring: Tracks SLAs for jobs based on start time, end time, or duration. Oozie will notify you when a 
+    job misses or meets its SLA through a web dashboard, REST API, JMS queue, or email
+    * Backend database: Stores Oozie’s persistent information: coordinators, bundles, SLAs, and workflow history
+    
+The client connects to the Oozie server and submits the job configuration (list of key-value pairs that defines 
+important parameters for the job execution, but not the workflow itself). The workflow, a set of actions and the logic 
+that connects them, is defined in a separate file called workflow.xml. The job configuration must include the location 
+on HDFS of the workflow.xml file. When the Oozie server receives the job configuration from the client,it reads the 
+workflow.xml file with the workflow definition from HDFS. The Oozie server then parses the workflow definition and 
+launches the actions as described in the workflow file.
+
+#### Oozie Workflow
+A workflow contains action nodes and control nodes. Action nodes are nodes responsible for running the actual 
+action, whereas a control node controls the flow of the execution. The workflow.xml file is a represen‐ tation of a 
+DAG of control and action nodes expressed as XML.
+
+#### Workflow Patterns
+    
+    * Point-to-Point Workflow: Actions that are executed sequentially
+    * Fan-Out Workflow: multiple actions in the workflow could run in parallel, but a later action requires all 
+    previous actions to be completed before it can be run (also called fork-and-join pattern). Use the fork tag to run 
+    tags in parallel and use the join tag to join the with for completion
+    * Capture-and-Decide Workflow: Used when the next action needs to be chosen based on the result of a previous 
+    action. Use the capture-output tag to capture the option of this action and the decision tag to route the result
+    
+#### Parameterizing Workflows
+Oozie allows you to specify parameters as variables in the Oozie workflow or coordinator actions and then set 
+values for these parameters when calling your workflows or coordinators. This can be done:
+
+    * By setting the property values in your config-defaults.xml file, which should be located in HDFS next to the 
+    workflow.xml file for the job
+    * By the job.properties file, which you pass using the -config command-line option 
+    * By passing parameters trough the -D <property=value> syntax
+    * By passing in the parameter when calling the workflow from the coordinator
+    * By specifying a list of mandatory parameters (also called formal parameters) in the workflow definition. The list 
+    can contain default values
+    
+#### Classpath Definition
+Dependencies for the actions must be available in the classpath when the action executes. You can define a shared 
+location for libraries used by predefined actions (_sharelib_), and it also provides multiple methods for developers 
+to add libraries specific to their applications. All Hadoop JARs are automatically included. You can also:
+
+    * Set oozie.libpath=/path/to/jars,another/path/to/jars in job.properties
+    * Create a directory named lib next to your workflow.xml file in HDFS and add the libraries there
+    * Specify the 'archive' tag in an action with the path to a single JAR
+    * Add the JAR to the sharelib directory (not recommended)
+    
+#### Scheduling Patterns
+Workflows are time-agnostic, you can run these workflows manually or schedule them to run when some predicates hold true
+
+    * Frequency Scheduling: To execute a workflow in a periodic manner
+    * Time and Data Triggers: When you need a workflow to run at a certain time but only if a particular data set or
+     a particular partition in the data set is available (the coordinator would check for its existence periodically 
+     until the specified timeout period)
+
+#### Executing Workflows
+To execute a workflow or a coordinator, first you place the XML defining them in HDFS and place any JARs or files that 
+the workflow depends on in HDFS. Then define a properties file, traditionally named _job.properties_. If you are 
+executing a coordinator, you’ll also need to include _oozie.coord.application.path_, the URL of the coordinator 
+definition XML.
+
+## Chapter 7: Near-Real-Time Processing with Hadoop<a name="Chapter7"></a> 
+### 
