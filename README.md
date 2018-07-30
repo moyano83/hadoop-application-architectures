@@ -923,5 +923,135 @@ the workflow depends on in HDFS. Then define a properties file, traditionally na
 executing a coordinator, you’ll also need to include _oozie.coord.application.path_, the URL of the coordinator 
 definition XML.
 
+
 ## Chapter 7: Near-Real-Time Processing with Hadoop<a name="Chapter7"></a> 
-### 
+### Stream Processing
+Near real time stream processing system should be aware of the following:
+
+    * Aggregation: the ability to manage counters
+    * Windowing averages: keeping track of an average over a given number of events or over a given window of time
+    * Record level enrichment: ability to modify a given record based on rules or content from an external system
+    * Record level alerting/validation: ability to throw an alert/warning based on single events arriving in the system
+    * Persistence of transient data: the ability to store state during processing
+    * Support for Lambda Architectures
+    * Higher-level functions: support for functions like sorting, grouping, partitioning...
+    * Integration with HDFS/HBase
+
+### Apache Storm
+Open source system designed for distributed processing of streaming data. Its architecture  follows these design goals:
+
+    * Simplicity of development and deployment: simple API and a limited number of abstractions to implement workflows
+    * Scalability
+    * Fault tolerance: processes are designed to be restartable if a process or node fails
+    * Data processing guarantees: every message passing through the system will be fully pro‐ cessed
+    * Broad programming language support: uses Apache Thrift in order to provide language portability
+
+#### Storm High-Level Architecture
+There are two types of nodes in a Storm cluster:
+
+    * The master node runs a process called Nimbus. Nimbus is responsible for distributing code around the cluster, 
+    assigning tasks to machines, and monitoring for failures (like the JobTracker in the MapReduce framework)
+    * Worker nodes run the Supervisor daemon which listens for work assigned to the node, and starts and 
+    stops processes that Nimbus has assigned to the node (like the TaskTrackers in MapReduce)
+    * Additionally, ZooKeeper nodes provide coordination for the Storm processes and storing the state of the cluster
+    
+#### Storm Topologies
+Topologies are a graph of computation, where each node in the topology contains processing logic. _Spouts_ and _bolts_ 
+are the Storm primitives, a network of spouts and bolts is what makes up a Storm topology. Spouts provide a source of
+ streams, taking input from things like message queues and social media feeds. Bolts consume one or more streams, 
+ perform some processing, and optionally create new streams.
+ 
+##### Tuples and Streams
+Tuples and streams provide abstractions for the data flowing through our Storm topology. A tuple is an ordered, named
+ list of values. A field in a tuple can be of any type; Storm provides primitive types, strings, and byte arrays. Every 
+node in a topology declares the fields for the tuples it emits. A stream is an unbounded sequence of tuples between 
+any two nodes in a topology.
+
+##### Spouts and Bolts
+
+    * Spouts: reads data from some external source and emits one or more streams into a topology for processing
+    * Bolts: consumes streams from spouts or upstream bolts in a topology, do some processing on the tuples in the 
+    stream, and them emit zero or more tuples to downstream bolts or external systems such as a data persistence 
+    layer. Process a single tuple at a time. 
+
+##### Stream Groupings
+Stream groupings tell Storm how to send tuples between sets of tasks in a topology. There are several groupings 
+provided with Storm:
+
+    * Shuffle grouping: tuples are emitted to instances of a bolt randomly, with the guarantee that each bolt 
+    instance will receive the same number of tuples
+    * Fields grouping: controls for how tuples are sent to bolts based on one or more fields in the tuples
+    * All grouping: replicates stream values across all participating bolts.
+    * Global grouping: Sends an entire stream to a single bolt
+    
+##### Reliability of Storm Applications
+There are different levels of guarantee in Storm:
+
+    * At-most-once processing: weaker guarantee
+    * At-least-once processing: Once (possibly more than once)
+    * Exactly-once processing: stronger guarantee
+    
+##### Exactly-Once Processing
+Storm offers two options:
+
+    * Transactional topologies (deprecated): tuple processing is split into two phases. One in where batches of tuples 
+    are processed in parallel and a commit phase which ensures that batches are committed in strict order
+    * Trident: exactly-once processing semantics with familiar query operators like joins, aggregations, grouping, 
+    functions, etc...
+    
+##### Fault Tolerance
+If workers die, the Supervisor process will restart them. On continued failure, the work will be assigned to another
+machine. If a server dies, tasks assigned to that host will time out and be reassigned to other hosts. If the Nimbus
+or a Supervisor process dies, it can be restarted without affecting the processing on the Storm cluster. Additionally,
+the worker processes can con‐ tinue to process tuples if the Nimbus process is down.
+
+##### Integrating Storm with HDFS
+Storm is intended as a standalone processing system, although it can be easily integrated with external systems as both 
+data sources and data sinks, one of them provides the ability to write text and sequence files to HDFS.
+
+##### Integrating Storm with HBase
+The same considerations we discussed for the HDFS integration apply to how Storm interacts with HBase, make sure you
+ are doing batch puts to HBase, not just single puts.
+ 
+##### Evaluating Storm
+
+    * Support for aggregation and windowing: Ease to implement tasks like counting and calculating windowing 
+    averages, although aggregations are not reliable and limited throughput
+    * Enrichment and alerting:  low-latency access to events, which allows developers to implement event enrichment 
+    and alerting functionality
+    * Lamdba Architecture: There is possibilities of duplicate data
+    
+### Trident
+Higher-level abstraction over Storm that addresses some of the shortcomings of processing a single event at a time, 
+follows a declarative programming model similar to SQL. A Trident application replaces the Storm spout with a 
+Trident spout, but rather than defining bolts to process tuples, Trident operations are used for processing. Trident
+ provides a number of operation types such as filters, splits, merges, joins, and groupings and  follows a microbatching
+ model: streams are handled as batches of tuples rather than individual tuples.
+ 
+##### Evaluating Trident
+
+    * Support for counting and windowing: higher throughput than storm
+    * Enrichment and alerting: similar functionality as core Storm
+    * Lamdba Architecture: to support the Lambda Architecture we need to implement the batch process in something 
+    like MapReduce or Spark
+    
+### Spark Streaming
+Leverages Spark RDDs and combines it with reliablity and exactly-once semantics with very high throughput.
+
+#### Overview of Spark Streaming
+A normal RDD is a reference to a distributed immutable collection, instead, the DStream is a reference to a distributed 
+immutable collection in relation to a batch window.
+
+##### Evaluating Spark Streaming
+
+    * Support for counting and windowing: Counting, windowing, and rolling averages are straightforward in Spark 
+    Streaming, although with sligtly higher latency and persistent state
+    * Enrichment and alerting: Same than storm with higher performance throughput and latency
+    * Lambda Architecture: Similar to Storm
+    
+### Flume Interceptors
+Flume is highly tuned for ingestion. This is important for cases of validation and alerting because these normally 
+come with a persistence requirement.
+
+
+## Chapter 8: Clickstream Analysis<a name="Chapter8"></a>
